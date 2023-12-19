@@ -5,10 +5,10 @@ use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use art::art::Tree;
-use art::FixedKey;
+use art::{FixedKey, VariableKey};
 
-pub fn seq_insert(c: &mut Criterion) {
-    let mut group = c.benchmark_group("seq_insert");
+pub fn inserts(c: &mut Criterion) {
+    let mut group = c.benchmark_group("inserts");
     group.throughput(Throughput::Elements(1));
     group.bench_function("seq_insert", |b| {
         let mut tree = Tree::<FixedKey<16>, _>::new();
@@ -19,16 +19,9 @@ pub fn seq_insert(c: &mut Criterion) {
         })
     });
 
-    group.finish();
-}
-
-pub fn rand_insert(c: &mut Criterion) {
-    let mut group = c.benchmark_group("rand_insert");
-    group.throughput(Throughput::Elements(1));
-
     let keys = gen_keys(3, 2, 3);
 
-    group.bench_function("art", |b| {
+    group.bench_function("rand_insert", |b| {
         let mut tree = Tree::<FixedKey<16>, _>::new();
         let mut rng = thread_rng();
         b.iter(|| {
@@ -40,10 +33,10 @@ pub fn rand_insert(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn seq_delete(c: &mut Criterion) {
-    let mut group = c.benchmark_group("seq_delete");
+pub fn deletes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("deletes");
     group.throughput(Throughput::Elements(1));
-    group.bench_function("art", |b| {
+    group.bench_function("seq_delete", |b| {
         let mut tree = Tree::<FixedKey<16>, _>::new();
         b.iter_custom(|iters| {
             for i in 0..iters {
@@ -57,15 +50,9 @@ pub fn seq_delete(c: &mut Criterion) {
         })
     });
 
-    group.finish();
-}
-
-pub fn rand_delete(c: &mut Criterion) {
-    let mut group = c.benchmark_group("rand_delete");
-    let keys = gen_keys(3, 2, 3);
-
     group.throughput(Throughput::Elements(1));
-    group.bench_function("art", |b| {
+    group.bench_function("rand_delete", |b| {
+        let keys = gen_keys(3, 2, 3);
         let mut tree = Tree::<FixedKey<16>, _>::new();
         let mut rng = thread_rng();
         for key in &keys {
@@ -73,28 +60,44 @@ pub fn rand_delete(c: &mut Criterion) {
         }
         b.iter(|| {
             let key = &keys[rng.gen_range(0..keys.len())];
-            criterion::black_box(tree.remove(&key.into()));
+            tree.remove(&key.into());
         })
     });
 
     group.finish();
 }
 
-pub fn rand_get(c: &mut Criterion) {
-    let mut group = c.benchmark_group("random_get");
+pub fn reads(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reads");
 
     group.throughput(Throughput::Elements(1));
-    {
-        let size = 1_000_000;
+
+    for size in [100u64, 1000, 10_000, 100_000, 1_000_000] {
         let mut tree = Tree::<FixedKey<16>, _>::new();
-        for i in 0..size as u64 {
+        for i in 0..size {
             tree.insert(&i.into(), i, 0, 0).unwrap();
         }
-        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
+
+        group.bench_with_input(BenchmarkId::new("rand_get", size), &size, |b, size| {
             let mut rng = thread_rng();
             b.iter(|| {
                 let key: u64 = rng.gen_range(0..*size);
-                criterion::black_box(tree.get(&key.into(), 0));
+                tree.get(&key.into(), 0).unwrap();
+            })
+        });
+    }
+
+    for size in [100u64, 1000, 10_000, 100_000, 1_000_000] {
+        group.bench_with_input(BenchmarkId::new("seq_get", size), &size, |b, size| {
+            let mut tree = Tree::<FixedKey<16>, _>::new();
+            for i in 0..*size {
+                tree.insert(&i.into(), i, 0, 0).unwrap();
+            }
+
+            let mut key = 0u64;
+            b.iter(|| {
+                tree.get(&key.into(), 0);
+                key += 1;
             })
         });
     }
@@ -124,28 +127,6 @@ pub fn rand_get_str(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn seq_get(c: &mut Criterion) {
-    let mut group = c.benchmark_group("seq_get");
-
-    group.throughput(Throughput::Elements(1));
-    {
-        let size = 1_000_000;
-        let mut tree = Tree::<FixedKey<16>, _>::new();
-        for i in 0..size as u64 {
-            tree.insert(&i.into(), i, 0, 0).unwrap();
-        }
-        group.bench_with_input(BenchmarkId::new("art", size), &size, |b, size| {
-            let mut key = 0u64;
-            b.iter(|| {
-                criterion::black_box(tree.get(&key.into(), 0));
-                key += 1;
-            })
-        });
-    }
-
-    group.finish();
-}
-
 fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
     let mut keys = Vec::new();
     let chars: Vec<char> = ('a'..='z').collect();
@@ -168,7 +149,38 @@ fn gen_keys(l1_prefix: usize, l2_prefix: usize, suffix: usize) -> Vec<String> {
     keys
 }
 
-criterion_group!(delete_benches, seq_delete, rand_delete);
-criterion_group!(insert_benches, seq_insert, rand_insert);
-criterion_group!(read_benches, seq_get, rand_get, rand_get_str);
-criterion_main!(insert_benches, read_benches);
+pub fn iters(c: &mut Criterion) {
+    let mut group = c.benchmark_group("iters");
+    group.throughput(Throughput::Elements(1));
+    for size in [100u64, 1000, 10_000, 100_000] {
+        // 1_000_000 requires a very long time
+        group.bench_with_input(BenchmarkId::new("iter_u64", size), &size, |b, size| {
+            let mut tree = Tree::<FixedKey<16>, _>::new();
+            for i in 0..*size {
+                tree.insert(&i.into(), i, 0, 0).unwrap();
+            }
+            b.iter(|| {
+                tree.iter().count();
+            })
+        });
+    }
+
+    group.bench_function("iter_variable_size_key", |b| {
+        let mut tree = Tree::<VariableKey, _>::new();
+        for i in gen_keys(2, 2, 2) {
+            tree.insert(&VariableKey::from_slice(i.as_bytes()), i, 0, 0)
+                .unwrap();
+        }
+        b.iter(|| {
+            tree.iter().count();
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(delete_benches, deletes);
+criterion_group!(insert_benches, inserts);
+criterion_group!(read_benches, reads, rand_get_str);
+criterion_group!(iter_benches, iters);
+criterion_main!(insert_benches, read_benches, delete_benches, iter_benches);
